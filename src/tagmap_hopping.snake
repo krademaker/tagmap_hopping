@@ -1,0 +1,409 @@
+# Snakefile description ---------------------------------------------------
+# Title:   Tagmentation-based Mapping (TagMap) of local transposon hopping
+# Aims:
+# Authors: Christ Leemans (created the pipeline and established all functions)
+#          Koen Rademaker (adapted calling allelic insertions, mapping and
+#          sorting insertion sites)
+# Links:   https://github.com/vansteensellab/tagmap_hopping
+#          https://github.com/krademaker/tagmap_hopping
+# Date:    24 November 2021
+# -------------------------------------------------------------------------
+
+
+
+# Index of this pipeline --------------------------------------------------
+# 1 - Import Python modules                                      line xxx
+# 2 - Define global variables                                    line xxx
+# 3 - Parse configuration and pairing file                       line xxx
+# 4 - Main workflow rule 'all'                                   line xxx
+#     - get_all_inputs                                             line xxx
+# 5 - Helper functions                                           line xxx
+#     - get_home_info                                              line xxx
+#     - get_input_info                                             line xxx
+#     - get_from_config                                            line xxx
+#     - get_home_region                                            line xxx
+#     - get_home_insert                                            line xxx
+#     - get_home_chain                                             line xxx
+#     - get_bed                                                    line xxx
+#     - get_arms                                                   line xxx
+#     - get_sites                                                  line xxx
+#     - get_overhang                                               line xxx
+#     - get_home_ref                                               line xxx
+#     - get_ref_genome                                             line xxx
+#     - get_allele                                                 line xxx
+#     - get_pairs                                                  line xxx
+#     - get_file_pair                                              line xxx
+#     - get_setting                                                line xxx
+#     - get_bowtie_index                                           line xxx
+#     - get_raw_input                                              line xxx
+#     - get_structure                                              line xxx
+# 6 - Workflow rules                                             line xxx
+#     - parse_reads                                                line xxx
+# -------------------------------------------------------------------------
+
+
+
+
+# Import Python modules ---------------------------------------------------
+import inspect
+import os
+import re
+import pandas
+import yaml
+# -------------------------------------------------------------------------
+
+
+
+# Define global variables -------------------------------------------------
+FILENAME = inspect.getframeinfo(inspect.currentframe()).filename
+PATH = os.path.dirname(os.path.abspath(FILENAME))
+SAMTOOLS = config['samtools']
+# -------------------------------------------------------------------------
+
+
+
+
+# Parse configuration and pairing -----------------------------------------
+configuration_df = pandas.read_csv(config['configuration_file'], sep = '\t')
+configuration_df.columns = [col.lower() for col in configuration_df.columns]
+pairing_df = pandas.read_csv(config['pairing_file'], sep = '\t')
+pairing_df.columns = [col.lower() for col in pairing_df.columns]
+# check for the presence of correct configuration columns
+for name in ['sample_name', 'structure', 'mate', 'file', 'reaction', 'library',
+             'construct_type', 'cell_type', 'genome']:
+    if name not in configuration_df.columns:
+        raise Exception('%s not found in configuration file' % name)
+# check for the presence of correct pairing columns
+for name in ['sample_name', 'forward', 'reverse', 'home_location',
+             'home_sequence', 'hybrid']:
+    if name not in pairing_df.columns:
+        raise Exception('%s not found in pairing file' % name)
+# -------------------------------------------------------------------------
+
+
+
+
+# Main workflow rule "all" ------------------------------------------------
+def get_all_inputs(config, configuration_df, pairing_df):
+    """
+    Get input file paths for Snakemake rule "all".
+
+    Description:
+    Generates the list of input file paths needed to build the Snakemake DAG
+    and execute all required rules to call insertion sites.
+
+    Input:
+    - config: Snakemake config from .yaml
+    - configuration_df: Pandas dataframe with sample details (name, structure,
+                        mate, file, reaction, library, construct type, cell
+                        type, genome)
+    - pairing_df: Pandas dataframe with sample pairing details (sample_name,
+                  forward, reverse, home_location, home_sequence, hybrid)
+
+    Output:
+    - file_list: String list with file paths to output files at the final step
+                 of the Snakemake DAG
+
+    Method:
+    Loop over paired samples and determine presence of forward and/or reverse
+    Tagmentation reactions, as well as of home locations and hybrid genomes
+    to determine which output file(s) with insertion sites should be generated
+    by the pipeline.
+    """
+
+    # iterate rows of pairing file
+    for pairing_row in pairing_df.itertuples():
+        # for samples without reverse reaction, get the corresponding forward
+        # R1/R2 reads and reference genome. set the file paths for insertions
+        # (differentiate path based on presence of home location)
+        if pairing_row.reverse == '-':
+            is_forward = configuration_df['sample_name']==pairing_row.forward
+            input_forward = configuration_df[is_forward]
+            genome_list = input_forward.genome.tolist()
+            if pairing_row.home_location != '-':
+                file_list = ['hopping/insertions_ref/%s.txt' % (pairing_row.sample_name),
+                             'hopping/sorted_ref/%s.bam' % (pairing_row.forward)]
+            else:
+                file_list = ['home/insertions/%s.txt' % pairing_row.sample_name]
+        # for samples without forward reaction, get the corresponding reverse
+        # R1/R2 reads and reference genome. set the file paths for insertions
+        # (differentiate path based on presence of home location)
+        elif pairing_row.forward == '-':
+            is_reverse = configuration_df['sample_name']==pairing_row.reverse
+            input_reverse = configuration_df[is_reverse]
+            genome_list = input_reverse.genome.tolist()
+            if pairing_row.home_location!='-':
+                file_list = ['hopping/insertions_ref/%s.txt' % (pairing_row.sample_name),
+                             'hopping/sorted_ref/%s.bam' % (pairing_row.reverse)]
+            else:
+                file_list = ['home/insertions/%s.txt' % pairing_row.reverse]
+        # for samples with both forward and reverse reactions, test that no data
+        # is missing. get the corresponding R1/R2 reads and reference genome,
+        # set the file paths for insertions (differentiate path based on
+        # presence of home location, hybrid genome)
+        else:
+            is_forward = configuration_df['sample_name']==pairing_row.forward
+            is_reverse = configuration_df['sample_name']==pairing_row.reverse
+            if not is_forward.any():
+                raise ValueError('sample_name "%s" not found in input data' %
+                                 pairing_row.forward)
+            if not is_reverse.any() and pairing_row.reverse!='-':
+                raise ValueError('sample_name "%s" not found in input data' %
+                                 pairing_row.reverse)
+            input_forward = configuration_df[is_forward]
+            input_reverse = configuration_df[is_reverse]
+
+            if pairing_row.home_location != '-':
+                genome_list = input_forward.genome.tolist() + input_reverse.genome.tolist()
+                if pairing_row.home_location in pairing_df.sample_name:
+                    file_list.extend(['hopping/insertions_ref/%s.txt' % (pairing_row.sample_name),
+                                      'hopping/sorted_ref/%s.bam' % (pairing_row.forward),
+                                      'hopping/sorted_ref/%s.bam' % (pairing_row.reverse)])
+                else:
+                    file_list = ['hopping/insertions_ref/%s.txt' % (pairing_row.id),
+                                 'hopping/sorted_ref/%s.bam' % (pairing_row.forward),
+                                 'hopping/sorted_ref/%s.bam' % (pairing_row.reverse)]
+            else:
+                genome_list = input_forward.genome.tolist() + input_reverse.genome.tolist()
+                if pairing_row.hybrid != '-':
+                    file_list = ['home/allelic_insertions/%s.txt' % (pairing_row.sample_name)]
+                else:
+                    file_list = ['home/insertions/%s.txt' % (pairing_row.sample_name)]
+        # check for unanimous reference genome across samples, return file paths
+        if all(genome == genome_list[0] for genome in genome_list):
+            for file_name in file_list:
+                yield('%s/%s/%s' % (config['outdir'], genome_list[0],
+                                    file_name))
+        else:
+            raise ValueError(('reference genome for pair %s with  %s and %s is '
+                              'not the same for every file') % (pairing_row.sample_name,
+                                                                pairing_row.forward,
+                                                                pairing_row.reverse))
+
+# rule all:
+#   input:
+#       [i for i in get_all_inputs(config, configuration_df, pairing_df)]
+# input = ['/home/sorted/x.bam']
+# -------------------------------------------------------------------------
+
+
+# General functions -------------------------------------------------------
+# TODO: DOCUMENT (HOME RELATED)
+def get_home_info(pairing_df, pair):
+    this_pair = pairing_df[pairing_df['id']==pair]
+    home_list = this_pair.ix[:,'home_location':'home_sequence'].values[0]
+    return(home_list)
+
+
+# TODO: DOCUMENT (HOME RELATED)
+def get_input_info(pairing_df, input_df, pair):
+    this_pair = pairing_df[pairing_df['id']==pair]
+    sample_list = this_pair.ix[:,'forward':'reverse'].values[0]
+    this_input = input_df.query("sample_name in @sample_list")
+    return(this_input)
+
+
+# TODO: DOCUMENT (HOME RELATED)
+def get_from_config(config, input_df, pairing_df, pair, column, info):
+    name_list = [name for name in get_pairs(pairing_df, pair)]
+    this_input = input_df[input_df['sample_name'].isin(name_list)]
+    info_list = this_input[column].tolist()
+
+    if all(x == info_list[0] for x in info_list):
+        return(config[info][info_list[0]])
+    else:
+        raise ValueError(('%s definition for pair %s with '
+                          '%s and %s is not the same for '
+                          'every file') % (column, home_row.ID, home_row.forward,
+                                           home_row.reverse))
+
+
+# TODO: DOCUMENT (HOME RELATED)
+def get_home_region(config, pairing_df, wildcards, pair=False):
+    this_pair = pairing_df.query(("id == @wildcards.name | "
+                                  "forward == @wildcards.name | "
+                                  "reverse == @wildcards.name"))
+    pair_list = this_pair.ix[:,'home_location':'home_sequence'].values[0]
+    return('%s/home/regions/%s-%s.insilico.txt' % (wildcards.outdir,
+                                                   pair_list[0], pair_list[1]))
+
+
+# TODO: DOCUMENT (HOME RELATED)
+def get_home_insert(config, pairing_df, wildcards, pair=False):
+    this_pair = pairing_df.query(("id == @wildcards.name | "
+                                  "forward == @wildcards.name | "
+                                  "reverse == @wildcards.name"))
+    home = this_pair.ix[:,'home_location'].values[0]
+    if home in pairing_df.id:
+        return('%s/home/insertions/%s.txt' % (wildcards.outdir, home))
+    else:
+        pair_list = this_pair.ix[:,'home_location':'home_sequence'].values[0]
+        return('%s/home/regions/%s-%s.ref.txt' % (wildcards.outdir, pair_list[0],
+                                                  pair_list[1]))
+
+
+# TODO: DOCUMENT (HOME RELATED)
+def get_home_chain(pairing_df, wildcards, direction):
+    this_pair = pairing_df.query(("id == @wildcards.name | "
+                                  "forward == @wildcards.name | "
+                                  "reverse == @wildcards.name"))
+    home_list = this_pair.ix[:,'home_location':'home_sequence'].values[0]
+    if 'genome' in wildcards.keys():
+        outdir = '/'.join((wildcards.outdir, wildcards.genome))
+    else:
+        outdir = wildcards.outdir
+    return('%s/home/insilico_genome/%s-%s-%s.chain' % (outdir,
+                                                       home_list[0],
+                                                       home_list[1],
+                                                       direction))
+
+
+# TODO: DOCUMENT (HOME RELATED)
+def get_bed(config, pairing_df, wildcards):
+    ## check if it's TagMap based home
+    if wildcards.pair in pairing_df['id'].values:
+        return(get_file_pair(pairing_df, wildcards,
+                             '{outdir}/sorted_bed/{name}.bed'))
+    else:
+        return()
+
+
+# TODO: DOCUMENT (HOME RELATED)
+def get_arms(config, wildcards):
+    arm_dict = config['home_location']['homology_arms']
+    return(arm_dict[wildcards.pair])
+
+
+# TODO: DOCUMENT (HOME RELATED)
+def get_sites(config, pairing_df, wildcards):
+    ## check if it's TagMap based home
+    if 'genome' in wildcards.keys():
+        path = '{outdir}/{genome}/{type}'.format(**wildcards)
+    else:
+        path = wildcards.outdir
+    if wildcards.pair in pairing_df['id'].values:
+        return('{path}/insertions/{pair}.txt'.format(path=path, **wildcards))
+    else:
+        home_dict = config['home_location']
+        if ('homology_arms' in home_dict and
+                wildcards.pair in home_dict['homology_arms']):
+            return('{path}/homology_arms/{pair}.txt'.format(path=path, **wildcards))
+        else:
+            return()
+
+
+# TODO: DOCUMENT (HOME RELATED)
+def get_overhang(config, input_df, pairing_df, wildcards):
+    ## check if it's TagMap based home
+    if wildcards.pair in pairing_df['id'].values:
+        get_from_config(config, input_df, pairing_df,
+                        wildcards.pair, 'construct_type',
+                        'insertion_site')
+    else:
+        return(config['insertion_site']['CRISPR'])
+
+
+# TODO: DOCUMENT (HOME RELATED)
+def get_home_ref(config, wildcards):
+    if 'genome' not in wildcards.keys():
+        outdir, genome = re.match('(.*)/(.*)', wildcards.outdir).groups()
+    else:
+        outdir = wildcards.outdir
+        genome = wildcards.genome
+    if 'add_to_refgenome' in config:
+        return('{outdir}/ref_genome/{genome}.fa'.format(outdir=outdir,
+                                                        genome=genome))
+
+
+# TODO: DOCUMENT
+def get_ref_genome(config, input_df, pairing_df, wildcards):
+    if wildcards.construct == 'home':
+        if 'add_to_refgenome' in config:
+            ref = '{outdir}/ref_genome/{genome}.fa'.format(**wildcards)
+        else:
+            ref = get_from_config(config, input_df, pairing_df,
+                                  wildcards.pair, 'genome', 'ref_fasta')
+    else:
+        this_pair = pairing_df[pairing_df['id']==wildcards.pair]
+        pair_list = this_pair.ix[:,'home_location':'home_sequence'].values[0]
+        ref = '%s/%s/home/insilico_genome/%s-%s.fa' % (wildcards.outdir,
+                                                       wildcards.genome,
+                                                       pair_list[0],
+                                                       pair_list[1])
+    return(ref)
+
+
+# TODO: DOCUMENT (ALLELE RELATED)
+def get_allele(config, pairing_df, wildcards):
+    this_pair = pairing_df[pairing_df['id']==wildcards.pair]
+    return(config['hybrid'][this_pair.hybrid.values[0]])
+
+
+# TODO: DOCUMENT
+def get_pairs(pairing_df, pair):
+    # print(pair)
+    this_pair = pairing_df[pairing_df['id']==pair]
+    pair_list = this_pair.ix[:,'forward':'reverse'].values[0]
+    for pair in pair_list:
+        yield(pair)
+
+
+# TODO: DOCUMENT (ALLELE RELATED)
+def get_file_pair(pairing_df, wildcards, pattern):
+    for name in get_pairs(pairing_df, wildcards['pair']):
+        if name!= '-':
+            yield(pattern.format(name=name, **wildcards))
+
+
+# TODO: DOCUMENT
+def get_setting(pairing_df, wildcards, config):
+    if '-' in list(get_pairs(pairing_df, wildcards.pair)):
+        return(config['single'])
+    else:
+        return(config['paired'])
+
+
+# TODO: DOCUMENT
+def get_bowtie_index(config, pairing_df, wildcards):
+    if wildcards.construct == "home":
+        if 'add_to_refgenome' in config:
+            index = '{outdir}/ref_index/{genome}'.format(**wildcards)
+        else:
+            index = config['bowtie_index'][wildcards.genome]
+    elif wildcards.construct == "hopping":
+        this_pair = pairing_df.query(("forward == @wildcards.name | "
+                                      "reverse == @wildcards.name"))
+        pair_list = this_pair.ix[:,'home_location':'home_sequence'].values[0]
+        index = '%s/%s/home/insilico_index/%s-%s' % (wildcards.outdir, wildcards.genome,
+                                                     pair_list[0], pair_list[1])
+    return(index)
+
+
+# TODO: DOCUMENT
+def get_raw_input(config, input_df, wildcards):
+    this_input = input_df[input_df['sample_name']==wildcards.name]
+    mate1 = this_input[this_input['mate']=='R1']['file'].values[0]
+    mate2 = this_input[this_input['mate']=='R2']['file'].values[0]
+    if 'input_dir' in config:
+        for i in (mate1, mate2):
+            yield('/'.join((config['input_dir'], i)))
+    else:
+        for i in (mate1, mate2):
+            yield(i)
+
+
+# TODO: DOCUMENT
+def get_structure(config, input_df, wildcards):
+    this_input = input_df[input_df['sample_name']==wildcards.name]
+    structure_list = this_input.structure.tolist()
+    if all(structure == structure_list[0] for structure in structure_list):
+        structure = config['structure'][structure_list[0]]
+        return(structure)
+    else:
+        raise ValueError(('read pairs for sample "%s" do not have same'
+                          'structure key') % wildcards.name)
+# -------------------------------------------------------------------------
+
+# Workflow rules ----------------------------------------------------------
+
+# -------------------------------------------------------------------------
