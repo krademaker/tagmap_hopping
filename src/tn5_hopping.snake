@@ -608,29 +608,28 @@ rule allelic_intergrations:
 
 
 
-rule score_intergrations:
+rule map_insertions:
     input:
         bam=lambda wildcards: get_file_pair(pairing_df, wildcards,
                                            '{outdir}/{genome}/{construct}/sorted/{name}.bam'),
-        bed='{outdir}/{genome}/{construct}/combined/{pair}.txt',
-        fa=lambda wildcards: get_ref_genome(config, input_df, pairing_df,
-                                            wildcards)
+        putative='{outdir}/{genome}/{construct}/putative_insertions/{pair}.txt'
     output:
         '{outdir}/{genome}/{construct}/insertions/{pair}.txt'
-    # wildcard_constraints:
-    #     pair="hopping"
     params:
         overhang=lambda wildcards: get_from_config(config, input_df, pairing_df,
                                                    wildcards.pair,
                                                    'construct_type',
-                                                   'insertion_site')
+                                                   'insertion_site'),
+        min_depth=lambda wildcards: get_setting(pairing_df, wildcards,
+                                                config['min_depth'])
     shell:
-        '{path}/scripts/mepp_tags_v3.R --bam {input.bam}'
-        '                              --bed {input.bed}'
-        '                              --fasta {input.fa}'
-        '                              --out {output}'
-        '                              --overhang {params.overhang}'
-        '                              --mate 2' ## TODO: make this an actual option
+        'Rscript {path}/scripts/map_insertions.R --bam "{input.bam}"'
+        '                                        --input {input.putative}'
+        '                                        --overhang {params.overhang}'
+        '                                        --depth {params.min_depth}'
+        '                                        --samtools {samtools}'
+        '                                        --out {output}'
+
 
 
 
@@ -665,31 +664,24 @@ def get_setting(pairing_df, wildcards, config):
 
 
 
-rule combine:
+rule find_putative_insertions:
     input:
-       bed=lambda wildcards: get_file_pair(pairing_df, wildcards,
-                                           '{outdir}/sorted_bed/{name}.bed'),
        bam=lambda wildcards: get_file_pair(pairing_df, wildcards,
                                            '{outdir}/sorted/{name}.bam')
     output:
-       '{outdir}/combined/{pair}.txt',
-       '{outdir}/combined/{pair}.cut',
-       temp('{outdir}/temp_{pair}.txt')
+       '{outdir}/putative_insertions/{pair}.txt'
     params:
-       min_gap=config['mingap'],
-       min_depth=lambda wildcards: get_setting(pairing_df, wildcards,
-                                               config['min_depth']),
-       min_max_mapq=lambda wildcards: get_setting(pairing_df, wildcards,
+       overhang=lambda wildcards: get_from_config(config, input_df, pairing_df,
+                                                  wildcards.pair,
+                                                  'construct_type',
+                                                  'insertion_site'),
+       min_mapq=lambda wildcards: get_setting(pairing_df, wildcards,
                                                   config['min_max_mapq'])
     shell:
-       '{path}/scripts/combine_bed.sh -a "{input.bed}"'
-       '                              -b "{input.bam}"'
-       '                              -g {params.min_gap}'
-       '                              -d {params.min_depth}'
-       '                              -m {params.min_max_mapq}'
-       '                              -c {output[1]}'
-       '                              -t {output[2]}'
-       '                              -o {output[0]}'
+       '{path}/scripts/find_putative_insertions.sh -b "{input.bam}"'
+       '                                           -i {params.overhang}'
+       '                                           -m {params.min_mapq}'
+       '                                           -o {output}'
 
 
 
