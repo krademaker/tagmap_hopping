@@ -445,4 +445,42 @@ rule add_to_refgenome:
         shell(cmd)
 
 
+rule build_index:
+    """
+    Build index of reference genome.
+
+    Description:
+    After adding transposon sequence(s) to the reference genome, a new index of
+    this reference genome is built with Bowtie2 for later sequence alignments
+    with Bowtie2.
+
+    Input:
+    - /ref_genome/{genome}.fa:   Reference genome .fa file.
+
+    Params:
+    - {pair}:                    Bowtie2 index function parameters.
+
+    Output:
+    - /ref_index/{genome}.1/bt2: Bowtie2 .bt2 format files of the indexed
+                                 reference genome.
+
+    Method:
+    Bowtie2 indexing relies on the FM-index (Ferragina & Manzini) which in turn
+    is based on Burrows-Wheeler transform to build an index of sequence that can
+    be accessed more rapidly in sequence alignment than traiditional one-by-one
+    local alignment. For more documentation, see:
+    http://bowtie-bio.sourceforge.net/bowtie2/manual.shtml#the-bowtie2-build-indexer
+    """
+    input:
+        '{outdir}/{prefix}_genome/{pair}.fa'
+    output:
+        '{outdir}/{prefix}_index/{pair}.1.bt2'
+    params:
+        '{outdir}/{prefix}_index/{pair}'
+    wildcard_constraints:
+        name='[^/]+'
+    threads: 20
+    shell:
+        'bowtie2-build --threads {threads} {input} {params}'
+
 # -------------------------------------------------------------------------
