@@ -86,29 +86,30 @@ for name in ['sample_name', 'forward', 'reverse', 'home_location',
 # Main workflow rule "all" ------------------------------------------------
 def get_all_inputs(config, configuration_df, pairing_df):
     """
-    Get input file paths for Snakemake rule "all".
+    Get input file paths for Snakemake rule "all"
 
     Description:
     Generates the list of input file paths needed to build the Snakemake DAG
-    and execute all required rules to call insertion sites.
+    and execute all required rules to call insertion sites
 
     Input:
-    - config: Snakemake config from .yaml
+    - config:           Snakemake config from .yaml
     - configuration_df: Pandas dataframe with sample details (name, structure,
                         mate, file, reaction, library, construct type, cell
                         type, genome)
-    - pairing_df: Pandas dataframe with sample pairing details (sample_name,
-                  forward, reverse, home_location, home_sequence, hybrid)
+    - pairing_df:       Pandas dataframe with sample pairing details
+                        (sample_name, forward, reverse, home_location,
+                        home_sequence, hybrid)
 
     Output:
-    - file_list: String list with file paths to output files at the final step
-                 of the Snakemake DAG
+    - file_list:        String list with file paths to output files at the final
+                        step of the Snakemake DAG
 
     Method:
     Loop over paired samples and determine presence of forward and/or reverse
     Tagmentation reactions, as well as of home locations and hybrid genomes
     to determine which output file(s) with insertion sites should be generated
-    by the pipeline.
+    by the pipeline
     """
 
     # iterate rows of pairing file
@@ -380,11 +381,32 @@ def get_bowtie_index(config, pairing_df, wildcards):
     return(index)
 
 
-# TODO: DOCUMENT
-def get_raw_input(config, input_df, wildcards):
-    this_input = input_df[input_df['sample_name']==wildcards.name]
+def get_raw_input(config, configuration_df, wildcards):
+    """
+    Get raw FASTQ input file paths
+
+    Description:
+    Returns the file paths of FASTQ files for mate 1 and 2 of a siven sample.
+
+    Input:
+    - config:           Snakemake config from .yaml
+    - configuration_df: Pandas dataframe with sample details (name, structure,
+                        mate, file, reaction, library, construct type, cell
+                        type, genome)
+    - wildcards:        Snakemake wildcards
+
+    Output:
+    - mate1, mate:      File paths to a sample's FASTQ files of mate 1 and 2
+
+    Method:
+    Returns the full file paths to the FASTQ files for mate 1 and mate 2
+    respectively for a given sample that is passed in the wildcards.
+    """
+    # select input paired-end FASTQ files, split by mate 1 and 2
+    input = configuration_df[configuration_df['sample_name']==wildcards.name]
     mate1 = this_input[this_input['mate']=='R1']['file'].values[0]
     mate2 = this_input[this_input['mate']=='R2']['file'].values[0]
+    # return file paths for FASTQ data of mate 1 and mate 2
     if 'input_dir' in config:
         for i in (mate1, mate2):
             yield('/'.join((config['input_dir'], i)))
@@ -482,5 +504,56 @@ rule build_index:
     threads: 20
     shell:
         'bowtie2-build --threads {threads} {input} {params}'
+
+
+rule parse_reads:
+    """
+    Build index of reference genome.
+
+    Description:
+    After adding transposon sequence(s) to the reference genome, a new index of
+    this reference genome is built with Bowtie2 for later sequence alignments
+    with Bowtie2.
+
+    Input:
+    - /ref_genome/{genome}.fa:   Reference genome .fa file.
+
+    Params:
+    - {pair}:                    Bowtie2 index function parameters.
+
+    Output:
+    - /ref_index/{genome}.1/bt2: Bowtie2 .bt2 format files of the indexed
+                                 reference genome.
+
+    Method:
+    Bowtie2 indexing relies on the FM-index (Ferragina & Manzini) which in turn
+    is based on Burrows-Wheeler transform to build an index of sequence that can
+    be accessed more rapidly in sequence alignment than traiditional one-by-one
+    local alignment. For more documentation, see:
+    http://bowtie-bio.sourceforge.net/bowtie2/manual.shtml#the-bowtie2-build-indexer
+    """
+    input:
+        lambda wildcards: get_raw_input(config, input_df, wildcards)
+    output:
+        '{outdir}/parsed/{name}.statistics.txt',
+        '{outdir}/parsed/{name}.1.fastq.gz',
+        '{outdir}/parsed/{name}.2.fastq.gz',
+        structure = '{outdir}/parsed/{name}.structure.txt',
+    log:
+        '{outdir}/parsed/{name}.parser.log'
+    params:
+        structure= lambda wildcards: get_structure(config, input_df, wildcards),
+        outdir = '{outdir}/parsed/',
+        name= '{name}',
+        parser= config['parser']
+    run:
+        with open(output.structure, 'w') as f:
+            f.write(params.structure)
+        shell('{params.parser} -r -x -M 16 -a -n 1000000 -l {log} -p {input[1]} '
+              '-b {wildcards.name} {input[0]} {output.structure} {params.outdir}')
+
+
+
+
 
 # -------------------------------------------------------------------------
