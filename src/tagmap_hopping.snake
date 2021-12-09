@@ -184,6 +184,7 @@ def get_all_inputs(config, configuration_df, pairing_df):
 #   input:
 #       [i for i in get_all_inputs(config, configuration_df, pairing_df)]
 # input = ['/home/sorted/x.bam']
+
 # -------------------------------------------------------------------------
 
 
@@ -405,5 +406,43 @@ def get_structure(config, input_df, wildcards):
 # -------------------------------------------------------------------------
 
 # Workflow rules ----------------------------------------------------------
+rule add_to_refgenome:
+    """
+    Add transposon to reference genome.
+
+    Description:
+    Transposon sequences have to included in the reference genome for proper
+    mapping of transposon integrations. Adding the transposon to the reference
+    genome sequence file (.fa) is needed before indexing it, and subsequent
+    alignment with Bowtie2.
+
+    Input:
+    - ref_genome:       Path to .fa file of reference genome (string)
+    - add_to_refgenome: Path to .fa file of transposon(s) (string)
+
+    Params:
+    - add_to_refgenome: Key-value pair of name and path to .fa file
+                        of transposon(s) (dict)
+    Output:
+    - {genome}.fa:      Reference genome updated to include transposon sequence
+
+    Method:
+    Name and sequence of transposon(s) are added to the reference genome file
+    with the 'cat' function, according to FASTA conventions of header-sequence.
+    """
+    input:
+        ref_genome= lambda wildcards: config['ref_fasta'][wildcards.genome],
+        add_to_refgenome=config['add_to_refgenome'].values()
+    output:
+        '{outdir}/ref_genome/{genome}.fa'
+    params:
+        add_to_refgenome=config['add_to_refgenome']
+    run:
+        sed_list = ["<(sed 's/>.*/>{key}/' {file})".format(key=key, file=file)
+                    for key,file in params.add_to_refgenome.items()]
+        sed_str = ' '.join(sed_list)
+        cmd = 'cat {input.ref_genome} %s > {output}' % sed_str
+        shell(cmd)
+
 
 # -------------------------------------------------------------------------
