@@ -72,7 +72,6 @@ INSERTION_LENGTH=${#insertion}
 
 touch "${out}"
 
-
 # (1) Extract insertion site sequences, whilst accounting for transposon
 #     characteristics, e.g. length of the sequence (PiggyBac, TTAA = 4), and
 #     accepting alternative sequences as observed in the reads.
