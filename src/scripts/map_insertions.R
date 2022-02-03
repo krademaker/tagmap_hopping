@@ -42,23 +42,31 @@ parser$add_argument('--samtools', help = 'Path to samtools executable.')
 parser$add_argument('--out', help = 'File for result output.')
 argv <- parser$parse_args()
 
-# Split BAM path into separate items for forward and/or reverse BAM files.
+# Split BAM path into separate items for forward and/or reverse BAM files, also
+# works for a single BAM file.
 argv$bam <- unlist(strsplit(argv$bam, split = ' '))
 
+# Check filtered reads file is not empty ----------------------------------
+if ( file.size(argv$input) != 0 ) {
+    # Map insertion sites -------------------------------------------------
+    dt <- tagmapAnalyseR::readPutativeInsertions(argv$input)
+    ambiguous <- tagmapAnalyseR::findAmbiguousInsertionSites(dt, padding = (nchar(argv$overhang)*2)+2)
+    mapped <- tagmapAnalyseR::mapInsertionSites(dt = dt,
+                                                bam = argv$bam,
+                                                overhang = argv$overhang,
+                                                samtoolsPath = argv$samtools,
+                                                depth = as.integer(argv$depth),
+                                                ambiguousInsertions = ambiguous)
 
-# Map insertion sites -----------------------------------------------------
-dt <- tagmapAnalyseR::readPutativeInsertions(argv$input)
-ambiguous <- tagmapAnalyseR::findAmbiguousInsertionSites(dt, padding = 2)
-mapped <- tagmapAnalyseR::mapInsertionSites(dt = dt,
-                                            bam = argv$bam,
-                                            overhang = argv$overhang,
-                                            samtoolsPath = argv$samtools,
-                                            depth = argv$depth,
-                                            ambiguousInsertions = ambiguous)
-# TODO: Store 'mapped' as .RDS for potential detailed investigation of the
-# individual reads underlying insertion sites.
-mapped <- within(mapped, rm(read_names, width))
-
-
-# Write output file -------------------------------------------------------
-data.table::fwrite(mapped, file = argv$out, sep = '\t', na = '.', quote = FALSE)
+    # Write output file ---------------------------------------------------
+    if ( !is.null(mapped) ){
+        mapped <- within(mapped, rm(read_names, width))
+        data.table::fwrite(mapped, file = argv$out, sep = '\t', na = '.', quote = FALSE)
+    } else {
+        # Catch empty results and create empty file
+        file.create(argv$out)
+    }
+} else {
+    # Create empty file ---------------------------------------------------
+    file.create(argv$out)
+}
