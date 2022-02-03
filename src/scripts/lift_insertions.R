@@ -29,23 +29,23 @@ if (grepl('.bam', argv$insert)){
         system(paste("cp", argv$insert, argv$insert_left))
         quit()
     }
-    colnames(insert)[1:5] = c('name', 'flag', 'seqnames', 'start', 'mapq')
+    colnames(insert)[1:5] = c('name', 'flag', 'chr', 'start', 'mapq')
     coordinates = c('start')
 
     header = fread(cmd=paste('samtools view -H', argv$insert), header=F, sep='\t',
                              fill=T)
-    header[,seqnames:=gsub('SN:','',V2)]
+    header[,chr:=gsub('SN:','',V2)]
 
-    chromsize = fread(argv$chrom_sizes, col.names=c('seqnames', 'size'),
-                      key='seqnames')
-    header[,size:=chromsize[seqnames,size]]
+    chromsize = fread(argv$chrom_sizes, col.names=c('chr', 'size'),
+                      key='chr')
+    header[,size:=chromsize[chr,size]]
 
     header[!is.na(size), V3:= paste0('LN:', size)]
 
     this_cmd = paste(commandArgs())
     extra_line = list('@PG', 'ID:tagmap_hopping', 'PN:tagmap_hopping',
                       paste0('CL:', this_cmd), 'VN:0.1')
-    new_header = rbind(header[,-c('seqnames', 'size')], extra_line)
+    new_header = rbind(header[,-c('chr', 'size')], extra_line)
 
 } else {
     insert = fread(argv$insert, stringsAsFactors=F)
@@ -54,8 +54,9 @@ if (grepl('.bam', argv$insert)){
         fwrite(insert, argv$insert_left, sep='\t')
         quit()
     }
+    insert$name <- paste('insert_', seq.int(nrow(insert)), sep = '')
     insert_order = insert$name
-    coordinates = c('start', 'end', 'start_gap', 'end_gap')
+    coordinates = c('region_start', 'region_end', 'start', 'end')
     dist = fread(argv$dist, stringsAsFactors=F, key='name',
                  col.names=c('seq', 'start', 'end', 'name',
                              'p_adj', 'strand', 'seq_home', 'start_home',
@@ -78,11 +79,11 @@ if (grepl('.bam', argv$insert)){
 setkey(insert, 'name')
 
 lift_list = lapply(coordinates, function(x){
-    bed_dt = insert[,c('seqnames', x, 'name'), with=F]
-    colnames(bed_dt) = c('seqnames', 'end', 'name')
+    bed_dt = insert[,c('chr', x, 'name'), with=F]
+    colnames(bed_dt) = c('chr', 'end', 'name')
     bed_dt[,end:=as.numeric(end)]
     bed_dt[,start:=end-1]
-    bed_dt = bed_dt[!is.na(end), c('seqnames', 'start', 'end', 'name'), with=F]
+    bed_dt = bed_dt[!is.na(end), c('chr', 'start', 'end', 'name'), with=F]
     out = system2(command=c('liftOver', '/dev/stdin', argv$chain, '/dev/stdout',
                             argv$insert_left),
                   input=do.call(paste, c(bed_dt, sep='\t')),
@@ -108,7 +109,7 @@ lift_dt = Reduce(join, lift_list)
 out = merge(lift_dt, insert[,-coordinates,with=F], all.y=T)[, colnames(insert), with=F]
 
 if (grepl('.bam', argv$insert)){
-    sam_dt = rbind(new_header, out[order(seqnames, as.numeric(start))], fill=T)
+    sam_dt = rbind(new_header, out[order(chr, as.numeric(start))], fill=T)
     sam = do.call(paste, c(sam_dt, sep='\t'))
     sam_trim = str_trim(gsub('NA','',sam))
     system2(command=c('samtools', 'view', '-Sb', '/dev/stdin'),
@@ -116,6 +117,8 @@ if (grepl('.bam', argv$insert)){
 
     system2(command=c('samtools', 'index', argv$insert_out))
 } else {
+    out[is.na(start), region_start:=NA]
+    out[is.na(end), region_end:=NA]
     out[is.na(start), start:=round((end_home + start_home)/2)-1]
     out[is.na(end), end:=round((end_home + start_home)/2)]
     fwrite(out[insert_order, -c('name_home', 'start_home', 'end_home')],
