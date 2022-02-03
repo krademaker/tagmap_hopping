@@ -68,8 +68,6 @@ with open(args.out, 'w') as f_out:
 
         score_vec = []
         for vcf in args.alleles:
-            print(vcf)
-            print(list(run_bcftools(vcf, args.ref, loc, is_grc_vcf)))
             allelic_fa = list(run_bcftools(vcf, args.ref, loc, is_grc_vcf))[0]
             aln = pairwise2.align.globalms(str(new_fa.seq).upper(),
                                            str(allelic_fa.seq).upper(),
