@@ -5,8 +5,8 @@ BEGIN {
     arr["seqnames"] = 1
     arr["start"] = 2
     arr["end"] = 3
-    arr["start_gap"] = 4
-    arr["end_gap"] = 5
+    arr["start_gap"] = 2
+    arr["end_gap"] = 3
     arr[L] = -1
     arr[S] = -1
     arr["strand"] = -1
