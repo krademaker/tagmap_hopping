@@ -79,6 +79,8 @@ def get_all(config, input_df, pairing_df):
                     file_list = ['hopping/insertions_ref/%s.txt' % (pairing_row.id),
                                  'hopping/sorted_ref/%s.bam' % (pairing_row.forward),
                                  'hopping/sorted_ref/%s.bam' % (pairing_row.reverse)]
+                if 'hybrid' in pairing_df.columns and pairing_row.hybrid != '-':
+                    file_list.extend(['hopping/allelic_insertions/%s.txt' % (pairing_row.id)])
             else:
                 genome_list = input_fwd.genome.tolist() + input_rev.genome.tolist()
 
@@ -666,6 +668,8 @@ def get_setting(pairing_df, wildcards, config):
 
 rule find_putative_insertions:
     input:
+       bed=lambda wildcards: get_file_pair(pairing_df, wildcards,
+                                           '{outdir}/sorted_bed/{name}.bed'),
        bam=lambda wildcards: get_file_pair(pairing_df, wildcards,
                                            '{outdir}/sorted/{name}.bam')
     output:
@@ -799,18 +803,41 @@ rule index_genome:
         'samtools faidx {input}'
 
 rule add_to_refgenome:
+    """
+    Add transposon to reference genome.
+
+    Description:
+    Transposon sequences have to included in the reference genome for proper
+    mapping of transposon integrations. Adding the transposon to the reference
+    genome sequence file (.fa) is needed before indexing it, and subsequent
+    alignment with Bowtie2.
+
+    Input:
+    - ref_genome:       Path to .fa file of reference genome (string)
+    - add_to_refgenome: Path to .fa file of transposon(s) (string)
+
+    Params:
+    - add_to_refgenome: Key-value pair of name and path to .fa file
+                        of transposon(s) (dict)
+    Output:
+    - {genome}.fa:      Reference genome updated to include transposon sequence
+
+    Method:
+    Name and sequence of transposon(s) are added to the reference genome file
+    with the 'cat' function, according to FASTA conventions of header-sequence.
+    """
     input:
-        ref= lambda wildcards: config['ref_fasta'][wildcards.genome],
-        add= config['add_to_refgenome'].values()
+        ref_genome= lambda wildcards: config['ref_fasta'][wildcards.genome],
+        add_to_refgenome=config['add_to_refgenome'].values()
     output:
         '{outdir}/ref_genome/{genome}.fa'
     params:
-        add= config['add_to_refgenome']
+        add_to_refgenome=config['add_to_refgenome']
     run:
         sed_list = ["<(sed 's/>.*/>{key}/' {file})".format(key=key, file=file)
-                    for key,file in params.add.items()]
+                    for key,file in params.add_to_refgenome.items()]
         sed_str = ' '.join(sed_list)
-        cmd = 'cat {input.ref} %s > {output}' % sed_str
+        cmd = 'cat {input.ref_genome} %s > {output}' % sed_str
         shell(cmd)
 
 rule parse_reads:
