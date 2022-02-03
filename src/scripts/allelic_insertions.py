@@ -58,16 +58,18 @@ def run_bcftools(vcf, ref, loc, is_grc_vcf):
         yield(record)
 
 with open(args.out, 'w') as f_out:
-    print('\t'.join(['seqnames', 'start', 'end'] + args.label + ['call']),
+    print('\t'.join(['chr', 'start', 'end'] + args.label + ['call']),
           file=f_out)
     for i, row in insertion_pd.iterrows():
-        loc_tuple = (row.seqnames, row.start, row.end)
+        loc_tuple = (row.chr, row.region_start, row.region_end)
         loc = '%s:%i-%i' % loc_tuple
 
         new_fa = list(run_bcftools(args.vcf, args.ref, loc, False))[0]
 
         score_vec = []
         for vcf in args.alleles:
+            print(vcf)
+            print(list(run_bcftools(vcf, args.ref, loc, is_grc_vcf)))
             allelic_fa = list(run_bcftools(vcf, args.ref, loc, is_grc_vcf))[0]
             aln = pairwise2.align.globalms(str(new_fa.seq).upper(),
                                            str(allelic_fa.seq).upper(),
@@ -75,6 +77,11 @@ with open(args.out, 'w') as f_out:
                                            score_only=True)
 
             score_vec.append(aln)
+
+        if isinstance(score_vec[0], list):
+            score_vec[0] = 0.0
+        if isinstance(score_vec[1], list):
+            score_vec[1] = 0.0
 
         if score_vec[0] > score_vec[1]:
             call = args.label[0]
