@@ -574,4 +574,13 @@ rule parse_reads:
         shell('{params.parser} -r -x -M 16 -a -n 1000000 -l {log} -p {input[1]} '
               '-b {wildcards.name} {input[0]} {output.structure} {params.outdir}')
 
+
+
+# map_reads
+# sort_and_index
+# bamtobed
+# combine
+# score_integrations
+# allelic_intergrations
+
 # -------------------------------------------------------------------------
